@@ -6,16 +6,16 @@
  */
 
 import definePlugin from "@utils/types";
-import { getCurrentChannel, sendMessage } from \"@utils/discord\";
-import { openModal, closeModal, ModalRoot, ModalHeader, ModalContent, ModalSize } from \"@utils/modal\";
-import { ChatBarButton } from \"@api/ChatButtons\";
-// pull React & UI from webpack/common; react default is available there too
-import { Button, Forms, Menu, Popout, TextInput, React as ReactFromCommon } from \"@webpack/common\";
-const React = (ReactFromCommon ?? (globalThis as any).React) as typeof import(\"react\");
+import { getCurrentChannel, sendMessage } from "@utils/discord";
+import { openModal, closeModal, ModalRoot, ModalHeader, ModalContent, ModalSize } from "@utils/modal";
+import { ChatBarButton } from "@api/ChatButtons";
+import { Button, Forms, Menu, Popout, TextInput, React as ReactFromCommon } from "@webpack/common";
+
+const React = (ReactFromCommon ?? (globalThis as any).React) as typeof import("react");
 
 type Scheduled = { id: string; content: string; sendAt: number; channelId: string; createdAt: number; };
 
-const STORAGE_KEY = \"vc.msgSchedulerPlus.v2\";
+const STORAGE_KEY = "vc.msgSchedulerPlus.v2";
 const TICK_MS = 1000;
 
 const State = {
@@ -31,9 +31,10 @@ const State = {
             const raw = localStorage.getItem(STORAGE_KEY);
             const arr = raw ? JSON.parse(raw) : [];
             if (Array.isArray(arr)) {
-                this.scheduled = arr.filter(x => x && typeof x === \"object\" &&
-                    typeof x.id === \"string\" && typeof x.content === \"string\" &&
-                    typeof x.channelId === \"string\" && typeof x.sendAt === \"number\").sort((a,b)=>a.sendAt-b.sendAt);
+                this.scheduled = arr.filter(x => x && typeof x === "object" &&
+                    typeof x.id === "string" && typeof x.content === "string" &&
+                    typeof x.channelId === "string" && typeof x.sendAt === "number"
+                ).sort((a,b)=>a.sendAt-b.sendAt);
             } else this.scheduled = [];
         } catch {
             this.scheduled = [];
@@ -83,19 +84,19 @@ function ActualMessages({ onClose }: { onClose: () => void }) {
     React.useEffect(() => { const id = window.setInterval(() => force(x=>x+1), 1000); return () => clearInterval(id); }, []);
     const list = State.scheduled;
 
-    return React.createElement(Menu.Menu, { navId: \"vc-scheduled-messages\", onClose },
+    return React.createElement(Menu.Menu, { navId: "vc-scheduled-messages", onClose },
         list.length === 0
-            ? React.createElement(Menu.MenuItem, { id: \"vc-none\", label: \"no scheduled messages\", disabled: true, action(){} })
+            ? React.createElement(Menu.MenuItem, { id: "vc-none", label: "no scheduled messages", disabled: true, action(){} })
             : list.map(msg => React.createElement(Menu.MenuGroup, { key: msg.id, label: `${msg.channelId} — in ${humanETA(msg.sendAt)}` },
                 React.createElement(Menu.MenuItem, { id: `msg-${msg.id}`, label: `message: ${msg.content}`, disabled: true, action(){} }),
                 React.createElement(Menu.MenuItem, {
-                    id: `sendnow-${msg.id}`, label: \"send now\",
+                    id: `sendnow-${msg.id}`, label: "send now",
                     action(){ try { sendMessage(msg.channelId, { content: msg.content }); } finally {
                         State.scheduled = State.scheduled.filter(m => m.id !== msg.id); State.save(); force(x=>x+1);
                     } }
                 }),
                 React.createElement(Menu.MenuItem, {
-                    id: `cancel-${msg.id}`, label: \"cancel\", color: \"danger\",
+                    id: `cancel-${msg.id}`, label: "cancel", color: "danger",
                     action(){ State.scheduled = State.scheduled.filter(m => m.id !== msg.id); State.save(); force(x=>x+1); }
                 })
             ))
@@ -103,7 +104,6 @@ function ActualMessages({ onClose }: { onClose: () => void }) {
 }
 
 function Listen() {
-    // if any dependency is missing, bail out silently (prevents settings crash)
     if (!ChatBarButton || !Popout || !Menu || !Button) return null as any;
 
     const buttonRef = React.useRef<HTMLDivElement>(null);
@@ -117,19 +117,19 @@ function Listen() {
             targetElementRef: buttonRef,
             shouldShow: showMenu,
             onRequestClose: () => setShowMenu(false),
-            position: \"bottom\",
-            align: \"right\",
+            position: "bottom",
+            align: "right",
             animation: Popout.Animation?.NONE ?? 0,
             renderPopout: () => React.createElement(ActualMessages, { onClose: () => setShowMenu(false) })
         },
-        () => React.createElement(\"div\", { ref: buttonRef as any, style: { display: \"inline-block\" } },
+        () => React.createElement("div", { ref: buttonRef as any, style: { display: "inline-block" } },
             React.createElement(ChatBarButton, {
-                tooltip: \"schedule message (right-click to manage)\",
+                tooltip: "schedule message (right-click to manage)",
                 onClick: handleClick,
                 onContextMenu: handleContextMenu
             },
-                React.createElement(\"svg\", { width: 20, height: 20, viewBox: \"0 0 24 24\", style: { scale: \"1.2\" } },
-                    React.createElement(\"path\", { fill: \"currentColor\", d: \"M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z\" })
+                React.createElement("svg", { width: 20, height: 20, viewBox: "0 0 24 24", style: { scale: "1.2" } },
+                    React.createElement("path", { fill: "currentColor", d: "M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z" })
                 )
             )
         )
@@ -139,18 +139,18 @@ function Listen() {
 function Scheduler(props: any) {
     if (!Forms || !ModalRoot || !TextInput || !Button) return null as any;
 
-    const [content, setContent] = React.useState(\"\");
-    const [selectedDate, setSelectedDate] = React.useState(\"\");
-    const [channelId, setChannelId] = React.useState(\"\");
+    const [content, setContent] = React.useState("");
+    const [selectedDate, setSelectedDate] = React.useState("");
+    const [channelId, setChannelId] = React.useState("");
     const [err, setErr] = React.useState<string | null>(null);
 
     function validateAndSchedule() {
         setErr(null);
         const when = parseLocalDateTime(selectedDate);
-        if (!content.trim()) return setErr(\"message required\");
-        if (!channelId.trim()) return setErr(\"channel id required\");
-        if (!Number.isFinite(when)) return setErr(\"invalid date/time\");
-        if (when <= Date.now() + 1000) return setErr(\"time must be in the future\");
+        if (!content.trim()) return setErr("message required");
+        if (!channelId.trim()) return setErr("channel id required");
+        if (!Number.isFinite(when)) return setErr("invalid date/time");
+        if (when <= Date.now() + 1000) return setErr("time must be in the future");
 
         const entry: Scheduled = { id: State.uid(), content: content.trim(), channelId: channelId.trim(), sendAt: when, createdAt: Date.now() };
         State.scheduled = [...State.scheduled, entry].sort((a,b)=>a.sendAt-b.sendAt);
@@ -160,24 +160,24 @@ function Scheduler(props: any) {
 
     return React.createElement(ModalRoot, { ...(props||{}), size: ModalSize?.MEDIUM ?? void 0 },
         React.createElement(ModalHeader, null,
-            React.createElement(Forms.FormTitle, { tag: \"h5\" }, \"schedule a message\")
+            React.createElement(Forms.FormTitle, { tag: "h5" }, "schedule a message")
         ),
         React.createElement(ModalContent, null,
-            React.createElement(TextInput as any, { placeholder: \"message\", value: content, onChange: setContent }),
-            React.createElement(\"input\", {
-                type: \"datetime-local\", value: selectedDate, onChange: (e: any)=> setSelectedDate(e.target.value),
-                style: { width: \"95%\", padding: \"8px 10px\", margin: \"10px 0\", borderRadius: \"4px\", backgroundColor: \"#0000\",
-                         color: \"var(--text-normal)\", fontSize: \"14px\", outline: \"none\" }
+            React.createElement(TextInput as any, { placeholder: "message", value: content, onChange: setContent }),
+            React.createElement("input", {
+                type: "datetime-local", value: selectedDate, onChange: (e: any)=> setSelectedDate(e.target.value),
+                style: { width: "95%", padding: "8px 10px", margin: "10px 0", borderRadius: "4px", backgroundColor: "#0000",
+                         color: "var(--text-normal)", fontSize: "14px", outline: "none" }
             }),
-            React.createElement(TextInput as any, { placeholder: \"channel id\", value: channelId, onChange: setChannelId }),
-            React.createElement(\"div\", { style: { display: \"flex\", gap: 8, marginTop: 10 } },
+            React.createElement(TextInput as any, { placeholder: "channel id", value: channelId, onChange: setChannelId }),
+            React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
                 React.createElement(Button as any, {
                     color: (Button as any).Colors?.TRANSPARENT ?? void 0,
                     onClick: () => { try { const ch = getCurrentChannel(); if (ch?.id) setChannelId(ch.id); } catch {} }
-                }, \"use current channel\"),
-                React.createElement(Button as any, { color: (Button as any).Colors?.BRAND ?? void 0, onClick: validateAndSchedule }, \"schedule\")
+                }, "use current channel"),
+                React.createElement(Button as any, { color: (Button as any).Colors?.BRAND ?? void 0, onClick: validateAndSchedule }, "schedule")
             ),
-            err && React.createElement(Forms.FormText, { style: { color: \"var(--status-danger)\" } }, err)
+            err && React.createElement(Forms.FormText, { style: { color: "var(--status-danger)" } }, err)
         )
     );
 }
@@ -187,26 +187,26 @@ function openSchedulerModal() {
 }
 
 export default definePlugin({
-    name: \"MessageSchedulerPlusSafe\",
-    description: \"Safe client-side scheduler. Right-click clock to manage. Persists across restarts.\",
-    authors: [{ name: \"dznrm\" }],
+    name: "MessageSchedulerPlusSafe",
+    description: "Safe client-side scheduler. Right-click clock to manage. Persists across restarts.",
+    authors: [{ name: "dznrm" }],
     start() {
         try {
             State.load();
             State.startTimer();
             State.tick(); // catch-up
             const onVis = () => State.tick();
-            window.addEventListener(\"visibilitychange\", onVis);
+            window.addEventListener("visibilitychange", onVis);
             (window as any).__msp_safe_onVis = onVis;
         } catch (e) {
-            console.error(\"[MessageSchedulerPlusSafe] start failed\", e);
+            console.error("[MessageSchedulerPlusSafe] start failed", e);
         }
     },
     stop() {
         try {
             State.stopTimer();
             const onVis = (window as any).__msp_safe_onVis as (() => void) | undefined;
-            if (onVis) window.removeEventListener(\"visibilitychange\", onVis);
+            if (onVis) window.removeEventListener("visibilitychange", onVis);
             delete (window as any).__msp_safe_onVis;
         } catch {}
     },
