@@ -1,302 +1,216 @@
-/* MessageSchedulerPlus — a safer, persisted message scheduler for Vencord
- * Client-side only. Messages send only while the client is online.
- * No network/telemetry; data stored in localStorage under STORAGE_KEY.
+/* MessageSchedulerPlusSafe — hardened, settings-safe scheduler for Vencord
+ * Notes:
+ *  - Client-side only. Must be online at send time.
+ *  - Loads storage lazily in start(), not at module import (prevents settings crashes).
+ *  - Everything wrapped with guards; returns null instead of throwing if Discord internals shift.
  */
 
-import { ChatBarButton } from "@api/ChatButtons";
-import ErrorBoundary from "@components/ErrorBoundary";
-import { getCurrentChannel, sendMessage } from "@utils/discord";
-import { closeModal, ModalContent, ModalHeader, ModalRoot, ModalSize, openModal } from "@utils/modal";
-import definePlugin from "@utils/types";
-import { Button, Forms, Menu, Popout, TextInput } from "@webpack/common";
-import React from "react";
+import definePlugin from \"@utils/types\";
+import { getCurrentChannel, sendMessage } from \"@utils/discord\";
+import { openModal, closeModal, ModalRoot, ModalHeader, ModalContent, ModalSize } from \"@utils/modal\";
+import { ChatBarButton } from \"@api/ChatButtons\";
+// pull React & UI from webpack/common; react default is available there too
+import { Button, Forms, Menu, Popout, TextInput, React as ReactFromCommon } from \"@webpack/common\";
+const React = (ReactFromCommon ?? (globalThis as any).React) as typeof import(\"react\");
 
-type Scheduled = {
-    id: string;
-    content: string;
-    sendAt: number;      // epoch ms (local)
-    channelId: string;
-    createdAt: number;   // epoch ms
-};
+type Scheduled = { id: string; content: string; sendAt: number; channelId: string; createdAt: number; };
 
-const STORAGE_KEY = "vc.msgSchedulerPlus.v1";
+const STORAGE_KEY = \"vc.msgSchedulerPlus.v2\";
 const TICK_MS = 1000;
 
-function uid() {
-    // simple stable id: time + random; no crypto dependency
-    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
+const State = {
+    scheduled: [] as Scheduled[],
+    timer: null as number | null,
 
-function load(): Scheduled[] {
-    try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        const arr = raw ? JSON.parse(raw) : [];
-        if (!Array.isArray(arr)) return [];
-        return arr.filter(x =>
-            x && typeof x === "object" &&
-            typeof x.id === "string" &&
-            typeof x.content === "string" &&
-            typeof x.channelId === "string" &&
-            typeof x.sendAt === "number" &&
-            typeof x.createdAt === "number"
-        ).sort((a, b) => a.sendAt - b.sendAt);
-    } catch {
-        return [];
+    uid(): string {
+        return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    },
+
+    load() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            const arr = raw ? JSON.parse(raw) : [];
+            if (Array.isArray(arr)) {
+                this.scheduled = arr.filter(x => x && typeof x === \"object\" &&
+                    typeof x.id === \"string\" && typeof x.content === \"string\" &&
+                    typeof x.channelId === \"string\" && typeof x.sendAt === \"number\").sort((a,b)=>a.sendAt-b.sendAt);
+            } else this.scheduled = [];
+        } catch {
+            this.scheduled = [];
+        }
+    },
+
+    save() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.scheduled)); } catch { /* ignore */ }
+    },
+
+    startTimer() {
+        if (this.timer != null) return;
+        this.timer = window.setInterval(() => this.tick(), TICK_MS);
+    },
+
+    stopTimer() {
+        if (this.timer != null) { clearInterval(this.timer); this.timer = null; }
+    },
+
+    tick() {
+        const now = Date.now();
+        const due = this.scheduled.filter(m => m.sendAt <= now);
+        if (due.length === 0) return;
+        for (const m of due) {
+            try { sendMessage(m.channelId, { content: m.content }); } catch { /* ignore send failures */ }
+        }
+        this.scheduled = this.scheduled.filter(m => m.sendAt > now);
+        this.save();
     }
-}
-
-function save(list: Scheduled[]) {
-    try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-    } catch (e) {
-        // storage might be full; fail gracefully
-        console.error("[MessageSchedulerPlus] failed to persist:", e);
-    }
-}
-
-let scheduled: Scheduled[] = load();
-let timer: number | null = null;
-
-function startTimer() {
-    if (timer != null) return;
-    timer = window.setInterval(tick, TICK_MS);
-}
-
-function stopTimer() {
-    if (timer != null) {
-        clearInterval(timer);
-        timer = null;
-    }
-}
-
-function sendNowAndRemove(id: string) {
-    const msg = scheduled.find(m => m.id === id);
-    if (!msg) return;
-    try {
-        sendMessage(msg.channelId, { content: msg.content });
-    } catch (e) {
-        console.error("[MessageSchedulerPlus] send failed:", e);
-    } finally {
-        scheduled = scheduled.filter(m => m.id !== id);
-        save(scheduled);
-    }
-}
-
-function tick() {
-    const now = Date.now();
-    // send all due messages (handles clock drift / sleeps / tab inactive)
-    const due = scheduled.filter(m => m.sendAt <= now);
-    if (due.length === 0) return;
-    for (const m of due) sendNowAndRemove(m.id);
-}
+};
 
 function humanETA(targetMs: number) {
     const s = Math.max(0, Math.floor((targetMs - Date.now()) / 1000));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    if (h > 0) return `${h}h ${m}m ${sec}s`;
-    if (m > 0) return `${m}m ${sec}s`;
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h) return `${h}h ${m}m ${sec}s`;
+    if (m) return `${m}m ${sec}s`;
     return `${sec}s`;
 }
 
 function parseLocalDateTime(val: string) {
-    // input from <input type="datetime-local">, interpreted in local time by Date constructor
     const t = new Date(val).getTime();
     return Number.isFinite(t) ? t : NaN;
 }
 
 function ActualMessages({ onClose }: { onClose: () => void }) {
-    const [_, force] = React.useState(0);
+    const [, force] = React.useState(0);
+    React.useEffect(() => { const id = window.setInterval(() => force(x=>x+1), 1000); return () => clearInterval(id); }, []);
+    const list = State.scheduled;
 
-    React.useEffect(() => {
-        const id = window.setInterval(() => force(x => x + 1), 1000);
-        return () => clearInterval(id);
-    }, []);
-
-    return (
-        <Menu.Menu navId="vc-scheduled-messages" onClose={onClose}>
-            {scheduled.length === 0 && (
-                <Menu.MenuItem id="vc-no-scheduled" label="no scheduled messages" disabled action={() => { }} />
-            )}
-
-            {scheduled.map(msg => (
-                <Menu.MenuGroup label={`${msg.channelId} — in ${humanETA(msg.sendAt)}`} key={`scheduled-${msg.id}`}>
-                    <Menu.MenuItem id={`scheduled-msg-${msg.id}`} label={`message: ${msg.content}`} disabled action={() => { }} />
-                    <Menu.MenuItem
-                        id={`send-now-${msg.id}`}
-                        label="send now"
-                        action={() => {
-                            sendNowAndRemove(msg.id);
-                            force(x => x + 1);
-                        }}
-                    />
-                    <Menu.MenuItem
-                        id={`cancel-msg-${msg.id}`}
-                        label="cancel"
-                        color="danger"
-                        action={() => {
-                            scheduled = scheduled.filter(m => m.id !== msg.id);
-                            save(scheduled);
-                            force(x => x + 1);
-                        }}
-                    />
-                </Menu.MenuGroup>
-            ))}
-        </Menu.Menu>
+    return React.createElement(Menu.Menu, { navId: \"vc-scheduled-messages\", onClose },
+        list.length === 0
+            ? React.createElement(Menu.MenuItem, { id: \"vc-none\", label: \"no scheduled messages\", disabled: true, action(){} })
+            : list.map(msg => React.createElement(Menu.MenuGroup, { key: msg.id, label: `${msg.channelId} — in ${humanETA(msg.sendAt)}` },
+                React.createElement(Menu.MenuItem, { id: `msg-${msg.id}`, label: `message: ${msg.content}`, disabled: true, action(){} }),
+                React.createElement(Menu.MenuItem, {
+                    id: `sendnow-${msg.id}`, label: \"send now\",
+                    action(){ try { sendMessage(msg.channelId, { content: msg.content }); } finally {
+                        State.scheduled = State.scheduled.filter(m => m.id !== msg.id); State.save(); force(x=>x+1);
+                    } }
+                }),
+                React.createElement(Menu.MenuItem, {
+                    id: `cancel-${msg.id}`, label: \"cancel\", color: \"danger\",
+                    action(){ State.scheduled = State.scheduled.filter(m => m.id !== msg.id); State.save(); force(x=>x+1); }
+                })
+            ))
     );
 }
 
 function Listen() {
+    // if any dependency is missing, bail out silently (prevents settings crash)
+    if (!ChatBarButton || !Popout || !Menu || !Button) return null as any;
+
     const buttonRef = React.useRef<HTMLDivElement>(null);
     const [showMenu, setShowMenu] = React.useState(false);
+    const handleClick = () => { try { openSchedulerModal(); } catch {} setShowMenu(false); };
+    const handleContextMenu = (e: any) => { try { e?.preventDefault?.(); } catch {} setShowMenu(true); };
 
-    const handleClick = () => {
-        openSchedulerModal();
-        setShowMenu(false);
-    };
-
-    const handleContextMenu = (e: React.MouseEvent) => {
-        e.preventDefault();
-        setShowMenu(true);
-    };
-
-    return (
-        <Popout
-            targetElementRef={buttonRef}
-            shouldShow={showMenu}
-            onRequestClose={() => setShowMenu(false)}
-            position="bottom"
-            align="right"
-            animation={Popout.Animation.NONE}
-            renderPopout={() => <ActualMessages onClose={() => setShowMenu(false)} />}
-        >
-            {() => (
-                <div ref={buttonRef} style={{ display: "inline-block" }}>
-                    <ChatBarButton
-                        tooltip="schedule message (right-click to manage)"
-                        onClick={handleClick}
-                        onContextMenu={handleContextMenu}
-                    >
-                        <svg width="20" height="20" viewBox="0 0 24 24" style={{ scale: "1.2" }}>
-                            <path
-                                fill="currentColor"
-                                d="M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z"
-                            />
-                        </svg>
-                    </ChatBarButton>
-                </div>
-            )}
-        </Popout>
+    return React.createElement(
+        Popout,
+        {
+            targetElementRef: buttonRef,
+            shouldShow: showMenu,
+            onRequestClose: () => setShowMenu(false),
+            position: \"bottom\",
+            align: \"right\",
+            animation: Popout.Animation?.NONE ?? 0,
+            renderPopout: () => React.createElement(ActualMessages, { onClose: () => setShowMenu(false) })
+        },
+        () => React.createElement(\"div\", { ref: buttonRef as any, style: { display: \"inline-block\" } },
+            React.createElement(ChatBarButton, {
+                tooltip: \"schedule message (right-click to manage)\",
+                onClick: handleClick,
+                onContextMenu: handleContextMenu
+            },
+                React.createElement(\"svg\", { width: 20, height: 20, viewBox: \"0 0 24 24\", style: { scale: \"1.2\" } },
+                    React.createElement(\"path\", { fill: \"currentColor\", d: \"M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z\" })
+                )
+            )
+        )
     );
 }
 
 function Scheduler(props: any) {
-    const [content, setContent] = React.useState("");
-    const [selectedDate, setSelectedDate] = React.useState("");
-    const [channelId, setChannelId] = React.useState("");
+    if (!Forms || !ModalRoot || !TextInput || !Button) return null as any;
+
+    const [content, setContent] = React.useState(\"\");
+    const [selectedDate, setSelectedDate] = React.useState(\"\");
+    const [channelId, setChannelId] = React.useState(\"\");
     const [err, setErr] = React.useState<string | null>(null);
 
     function validateAndSchedule() {
         setErr(null);
-
         const when = parseLocalDateTime(selectedDate);
-        if (!content.trim()) return setErr("message required");
-        if (!channelId.trim()) return setErr("channel id required");
-        if (!Number.isFinite(when)) return setErr("invalid date/time");
-        if (when <= Date.now() + 1000) return setErr("time must be in the future");
+        if (!content.trim()) return setErr(\"message required\");
+        if (!channelId.trim()) return setErr(\"channel id required\");
+        if (!Number.isFinite(when)) return setErr(\"invalid date/time\");
+        if (when <= Date.now() + 1000) return setErr(\"time must be in the future\");
 
-        const entry: Scheduled = {
-            id: uid(),
-            content: content.trim(),
-            channelId: channelId.trim(),
-            sendAt: when,
-            createdAt: Date.now()
-        };
-
-        scheduled = [...scheduled, entry].sort((a, b) => a.sendAt - b.sendAt);
-        save(scheduled);
-        closeModal(props.transitionState?.modalKey);
+        const entry: Scheduled = { id: State.uid(), content: content.trim(), channelId: channelId.trim(), sendAt: when, createdAt: Date.now() };
+        State.scheduled = [...State.scheduled, entry].sort((a,b)=>a.sendAt-b.sendAt);
+        State.save();
+        try { closeModal((props as any)?.transitionState?.modalKey); } catch {}
     }
 
-    return (
-        <ErrorBoundary>
-            <ModalRoot {...props} size={ModalSize.MEDIUM}>
-                <ModalHeader>
-                    <Forms.FormTitle tag="h5">schedule a message</Forms.FormTitle>
-                </ModalHeader>
-                <ModalContent>
-                    <TextInput placeholder="message" value={content} onChange={setContent} />
-
-                    <input
-                        type="datetime-local"
-                        value={selectedDate}
-                        onChange={e => setSelectedDate(e.target.value)}
-                        style={{
-                            width: "95%",
-                            padding: "8px 10px",
-                            margin: "10px 0",
-                            borderRadius: "4px",
-                            backgroundColor: "#0000",
-                            color: "var(--text-normal)",
-                            fontSize: "14px",
-                            outline: "none"
-                        }}
-                    />
-
-                    <TextInput placeholder="channel id" value={channelId} onChange={setChannelId} />
-
-                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <Button
-                            color={Button.Colors.TRANSPARENT}
-                            onClick={() => {
-                                const ch = getCurrentChannel();
-                                if (ch?.id) setChannelId(ch.id);
-                            }}
-                        >
-                            use current channel
-                        </Button>
-
-                        <Button color={Button.Colors.BRAND} onClick={validateAndSchedule}>
-                            schedule
-                        </Button>
-                    </div>
-
-                    {err && (
-                        <Forms.FormText style={{ color: "var(--status-danger)" }}>
-                            {err}
-                        </Forms.FormText>
-                    )}
-                </ModalContent>
-            </ModalRoot>
-        </ErrorBoundary>
+    return React.createElement(ModalRoot, { ...(props||{}), size: ModalSize?.MEDIUM ?? void 0 },
+        React.createElement(ModalHeader, null,
+            React.createElement(Forms.FormTitle, { tag: \"h5\" }, \"schedule a message\")
+        ),
+        React.createElement(ModalContent, null,
+            React.createElement(TextInput as any, { placeholder: \"message\", value: content, onChange: setContent }),
+            React.createElement(\"input\", {
+                type: \"datetime-local\", value: selectedDate, onChange: (e: any)=> setSelectedDate(e.target.value),
+                style: { width: \"95%\", padding: \"8px 10px\", margin: \"10px 0\", borderRadius: \"4px\", backgroundColor: \"#0000\",
+                         color: \"var(--text-normal)\", fontSize: \"14px\", outline: \"none\" }
+            }),
+            React.createElement(TextInput as any, { placeholder: \"channel id\", value: channelId, onChange: setChannelId }),
+            React.createElement(\"div\", { style: { display: \"flex\", gap: 8, marginTop: 10 } },
+                React.createElement(Button as any, {
+                    color: (Button as any).Colors?.TRANSPARENT ?? void 0,
+                    onClick: () => { try { const ch = getCurrentChannel(); if (ch?.id) setChannelId(ch.id); } catch {} }
+                }, \"use current channel\"),
+                React.createElement(Button as any, { color: (Button as any).Colors?.BRAND ?? void 0, onClick: validateAndSchedule }, \"schedule\")
+            ),
+            err && React.createElement(Forms.FormText, { style: { color: \"var(--status-danger)\" } }, err)
+        )
     );
 }
 
 function openSchedulerModal() {
-    openModal(props => <Scheduler {...props} />);
+    try { openModal((props: any) => React.createElement(Scheduler, { ...(props||{}) })); } catch {}
 }
 
 export default definePlugin({
-    name: "MessageSchedulerPlus",
-    description:
-        "Schedule messages (client-side). Right-click the clock to manage. Persists across restarts.",
-    authors: [{ name: "dznrm" }],
+    name: \"MessageSchedulerPlusSafe\",
+    description: \"Safe client-side scheduler. Right-click clock to manage. Persists across restarts.\",
+    authors: [{ name: \"dznrm\" }],
     start() {
-        startTimer();
-        // run an immediate catch-up in case the client was closed during a due time
-        tick();
-        // also catch up when tab/app regains focus
-        const onVis = () => tick();
-        window.addEventListener("visibilitychange", onVis);
-        // stash the listener on the window so we can remove it on stop without globals
-        (window as any).__msp_onVis = onVis;
+        try {
+            State.load();
+            State.startTimer();
+            State.tick(); // catch-up
+            const onVis = () => State.tick();
+            window.addEventListener(\"visibilitychange\", onVis);
+            (window as any).__msp_safe_onVis = onVis;
+        } catch (e) {
+            console.error(\"[MessageSchedulerPlusSafe] start failed\", e);
+        }
     },
     stop() {
-        stopTimer();
-        const onVis = (window as any).__msp_onVis as (() => void) | undefined;
-        if (onVis) window.removeEventListener("visibilitychange", onVis);
-        delete (window as any).__msp_onVis;
+        try {
+            State.stopTimer();
+            const onVis = (window as any).__msp_safe_onVis as (() => void) | undefined;
+            if (onVis) window.removeEventListener(\"visibilitychange\", onVis);
+            delete (window as any).__msp_safe_onVis;
+        } catch {}
     },
-    renderChatBarButton: () => <Listen />
+    renderChatBarButton() {
+        try { return React.createElement(Listen, null); } catch { return null as any; }
+    }
 });
