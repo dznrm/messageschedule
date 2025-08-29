@@ -8,7 +8,7 @@
 import definePlugin from "@utils/types";
 import { getCurrentChannel, sendMessage } from "@utils/discord";
 import { openModal, closeModal, ModalRoot, ModalHeader, ModalContent, ModalSize } from "@utils/modal";
-import { ChatBarButton } from "@api/ChatButtons";
+import { addChatBarButton, removeChatBarButton } from "@api/ChatButtons";
 import { Button, Forms, Menu, Popout, TextInput, React as ReactFromCommon } from "@webpack/common";
 
 const React = (ReactFromCommon ?? (globalThis as any).React) as typeof import("react");
@@ -313,34 +313,42 @@ function openSchedulerModal() {
 
 export default definePlugin({
     name: "MessageSchedulerPlusSafe",
-    description:
-        "Safe client-side scheduler. Right-click clock to manage. Persists across restarts.",
+    description: "Safe client-side scheduler. Right-click clock to manage. Persists across restarts.",
     authors: [{ name: "dznrm" }],
     start() {
-        try {
-            State.load();
-            State.startTimer();
-            State.tick(); // catch-up
-            const onVis = () => State.tick();
-            window.addEventListener("visibilitychange", onVis);
-            (window as any).__msp_safe_onVis = onVis;
-        } catch (e) {
-            console.error("[MessageSchedulerPlusSafe] start failed", e);
-        }
+        State.load();
+        State.startTimer();
+        State.tick();
+
+        addChatBarButton("MessageSchedulerPlusSafe", () => ({
+            tooltip: "schedule message (right-click to manage)",
+            onClick: () => openSchedulerModal(),
+            onContextMenu: (e: MouseEvent) => {
+                e.preventDefault();
+                // open your management menu here if you want
+            },
+            element: React.createElement("svg", {
+                width: 20,
+                height: 20,
+                viewBox: "0 0 24 24",
+                style: { scale: "1.2" },
+                children: React.createElement("path", {
+                    fill: "currentColor",
+                    d: "M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z"
+                })
+            })
+        }));
+
+        const onVis = () => State.tick();
+        window.addEventListener("visibilitychange", onVis);
+        (window as any).__msp_safe_onVis = onVis;
     },
     stop() {
-        try {
-            State.stopTimer();
-            const onVis = (window as any).__msp_safe_onVis as (() => void) | undefined;
-            if (onVis) window.removeEventListener("visibilitychange", onVis);
-            delete (window as any).__msp_safe_onVis;
-        } catch {}
-    },
-    renderChatBarButton() {
-        try {
-            return React.createElement(Listen, null);
-        } catch {
-            return null as any;
-        }
+        State.stopTimer();
+        removeChatBarButton("MessageSchedulerPlusSafe");
+
+        const onVis = (window as any).__msp_safe_onVis as (() => void) | undefined;
+        if (onVis) window.removeEventListener("visibilitychange", onVis);
+        delete (window as any).__msp_safe_onVis;
     }
 });
