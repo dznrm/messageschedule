@@ -155,60 +155,6 @@ function ActualMessages({ onClose }: { onClose: () => void }) {
     );
 }
 
-function Listen() {
-    // if any dependency is missing, bail out silently (prevents settings crash)
-    if (!ChatBarButton || !Popout || !Menu || !Button) return null as any;
-
-    const buttonRef = React.useRef<HTMLDivElement>(null);
-    const [showMenu, setShowMenu] = React.useState(false);
-    const handleClick = () => {
-        try {
-            openSchedulerModal();
-        } catch {}
-        setShowMenu(false);
-    };
-    const handleContextMenu = (e: any) => {
-        try {
-            e?.preventDefault?.();
-        } catch {}
-        setShowMenu(true);
-    };
-
-    return React.createElement(
-        Popout,
-        {
-            targetElementRef: buttonRef,
-            shouldShow: showMenu,
-            onRequestClose: () => setShowMenu(false),
-            position: "bottom",
-            align: "right",
-            animation: Popout.Animation?.NONE ?? 0,
-            renderPopout: () => React.createElement(ActualMessages, { onClose: () => setShowMenu(false) })
-        },
-        () =>
-            React.createElement(
-                "div",
-                { ref: buttonRef as any, style: { display: "inline-block" } },
-                React.createElement(
-                    ChatBarButton,
-                    {
-                        tooltip: "schedule message (right-click to manage)",
-                        onClick: handleClick,
-                        onContextMenu: handleContextMenu
-                    },
-                    React.createElement(
-                        "svg",
-                        { width: 20, height: 20, viewBox: "0 0 24 24", style: { scale: "1.2" } },
-                        React.createElement("path", {
-                            fill: "currentColor",
-                            d: "M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z"
-                        })
-                    )
-                )
-            )
-    );
-}
-
 function Scheduler(props: any) {
     if (!Forms || !ModalRoot || !TextInput || !Button) return null as any;
 
@@ -313,42 +259,39 @@ function openSchedulerModal() {
 
 export default definePlugin({
     name: "MessageSchedulerPlusSafe",
-    description: "Safe client-side scheduler. Right-click clock to manage. Persists across restarts.",
+    description:
+        "Safe client-side scheduler. Right-click clock to manage. Persists across restarts.",
     authors: [{ name: "dznrm" }],
     start() {
-        State.load();
-        State.startTimer();
-        State.tick();
+        try {
+            State.load();
+            State.startTimer();
+            State.tick(); // catch-up
+            const onVis = () => State.tick();
+            window.addEventListener("visibilitychange", onVis);
+            (window as any).__msp_safe_onVis = onVis;
 
-        addChatBarButton("MessageSchedulerPlusSafe", () => ({
-            tooltip: "schedule message (right-click to manage)",
-            onClick: () => openSchedulerModal(),
-            onContextMenu: (e: MouseEvent) => {
-                e.preventDefault();
-                // open your management menu here if you want
-            },
-            element: React.createElement("svg", {
-                width: 20,
-                height: 20,
-                viewBox: "0 0 24 24",
-                style: { scale: "1.2" },
-                children: React.createElement("path", {
-                    fill: "currentColor",
-                    d: "M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z"
-                })
-            })
-        }));
-
-        const onVis = () => State.tick();
-        window.addEventListener("visibilitychange", onVis);
-        (window as any).__msp_safe_onVis = onVis;
+            addChatBarButton("MessageSchedulerPlusSafe", () => ({
+                tooltip: "schedule message (right-click to manage)",
+                onClick: () => openSchedulerModal(),
+                element: (
+                    <svg width="20" height="20" viewBox="0 0 24 24" style={{ scale: "1.2" }}>
+                        <path fill="currentColor" d="M12 2a10 10 0 1 0 0 20a10 10 0 0 0 0-20Zm1 5h-2v6h6v-2h-4z"/>
+                    </svg>
+                )
+            }));
+        } catch (e) {
+            console.error("[MessageSchedulerPlusSafe] start failed", e);
+        }
     },
     stop() {
-        State.stopTimer();
-        removeChatBarButton("MessageSchedulerPlusSafe");
+        try {
+            State.stopTimer();
+            const onVis = (window as any).__msp_safe_onVis as (() => void) | undefined;
+            if (onVis) window.removeEventListener("visibilitychange", onVis);
+            delete (window as any).__msp_safe_onVis;
 
-        const onVis = (window as any).__msp_safe_onVis as (() => void) | undefined;
-        if (onVis) window.removeEventListener("visibilitychange", onVis);
-        delete (window as any).__msp_safe_onVis;
+            removeChatBarButton("MessageSchedulerPlusSafe");
+        } catch {}
     }
 });
