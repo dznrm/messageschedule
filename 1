@@ -281,7 +281,7 @@ export default definePlugin({
     name: "MessageSchedulerPlus",
     description:
         "Schedule messages (client-side). Right-click the clock to manage. Persists across restarts.",
-    authors: [{ name: "dznrm" }]
+    authors: [{ name: "dznrm" }],
     start() {
         startTimer();
         // run an immediate catch-up in case the client was closed during a due time
